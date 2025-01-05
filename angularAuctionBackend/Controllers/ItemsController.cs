@@ -73,6 +73,63 @@ namespace angularAuctionBackend.Controllers
             }
         }
 
+        [HttpGet]
+        [Route("activeProduct/{id}")]
+        [Authorize(Roles = "buyer")]
+        public IActionResult GetProductById(int? id)
+        {
+            if (id == null)
+            {
+                return BadRequest("Product ID is required.");
+            }
+
+            try
+            {
+                using (SqlConnection con = new SqlConnection(_configuration.GetConnectionString("DefaultConnection")))
+                {
+                    con.Open();
+
+                    using (SqlCommand cmd = new SqlCommand("SELECT * FROM Items WHERE ItemID=@id", con))
+                    {
+                        cmd.Parameters.AddWithValue("@id", id);
+
+                        using (SqlDataReader reader = cmd.ExecuteReader())
+                        {
+                            if (reader.Read())
+                            {
+                                itemsDTO items = new itemsDTO
+                                {
+                                    ItemID = Convert.ToInt32(reader["ItemID"]),
+                                    Title = Convert.ToString(reader["Title"]),
+                                    Description = Convert.ToString(reader["Description"]),
+                                    Category = Convert.ToString(reader["Category"]),
+                                    ReservePrice = Convert.ToDecimal(reader["ReservePrice"]),
+                                    StartTime = Convert.ToDateTime(reader["StartTime"]),
+                                    EndTime = Convert.ToDateTime(reader["EndTime"]),
+                                    ImageURL = reader["ImageURL"].ToString(),
+                                    ImageURL1 = reader["ImageURL1"].ToString(),
+                                    ImageURL2 = reader["ImageURL2"].ToString()
+                                };
+
+                                return Ok(items);
+                            }
+                            else
+                            {
+                                return NotFound("Product not found.");
+                            }
+                        }
+                    }
+                }
+            }
+            catch(Exception ex)
+            {
+                return StatusCode(500, $"An error occurred while fetching product details.,{ex.Message}");
+            }
+        }
+
+
+
+
         [HttpPost]
         [Route("add-product")]
         public async Task<IActionResult> AddProduct([FromForm] AddProductDTO productRequest)
