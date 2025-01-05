@@ -26,12 +26,12 @@ namespace angularAuctionBackend.Controllers
 
         [HttpGet]
         [Route("activeProduct/{UserId}")]
-        [Authorize(Roles = "seller")]
+        [Authorize(Roles = "seller,buyer")]
         public IActionResult GetItems(int? UserId)
         {
             var query = "";
             if(UserId == 0) {
-                query = "SELECT * FROM Items ";
+                query = "SELECT * FROM Items";
             }
             else if (UserId != null)
             {
@@ -226,9 +226,6 @@ namespace angularAuctionBackend.Controllers
         }
 
 
-        [HttpPut]
-        [Route("update-product/{itemID}")]
-        [Authorize(Roles ="seller")]
 
         [HttpPut]
         [Route("update-products/{itemID}")]

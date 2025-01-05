@@ -1,4 +1,7 @@
-﻿using angularAuctionBackend.Model.ModelDto;
+﻿using angularAuctionBackend.Model;
+using angularAuctionBackend.Model.ModelDto;
+using angularAuctionBackend.Shared;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using Microsoft.IdentityModel.Tokens;
@@ -13,11 +16,13 @@ namespace angularAuctionBackend.Controllers
     public class AuthenticationController : ControllerBase
     {
         private readonly IConfiguration _configuration;
+        private readonly ImageSave _imageSave;
         private static readonly Dictionary<string, (string UserName, string Role)> RefreshTokens = new();
 
-        public AuthenticationController(IConfiguration config)
+        public AuthenticationController(IConfiguration config,ImageSave imageSave)
         {
             _configuration = config;
+            _imageSave = imageSave;
         }
 
         [HttpPost]
@@ -32,11 +37,13 @@ namespace angularAuctionBackend.Controllers
             try
             {
                 UserDTO user = null;
+                string storedHashedPassword = null;
                 var query = loginRequest.Role switch
                 {
-                    "admin" => "SELECT AdminID AS UserId FROM Admins WHERE UserName = @UserName AND Password = @Password",
-                    "seller" => "SELECT UserID AS UserId FROM Users WHERE UserName = @UserName AND Password = @Password",
-                    "buyer" => "SELECT CustomerID AS UserId FROM Customers WHERE UserName = @UserName AND Password = @Password",
+                    "seller" => "SELECT UserID AS UserId, Password FROM Users WHERE UserName = @UserName AND flag='1'",
+                    "buyer" => "SELECT CustomerID AS UserId, Password FROM Customers WHERE UserName = @UserName AND flag='1'",
+                    "admin" => "SELECT AdminID AS UserId, Password FROM Admins WHERE UserName = @UserName",
+
                     _ => throw new ArgumentException("Invalid role.")
                 };
 
@@ -46,7 +53,6 @@ namespace angularAuctionBackend.Controllers
                     using (SqlCommand cmd = new SqlCommand(query, con))
                     {
                         cmd.Parameters.AddWithValue("@UserName", loginRequest.UserName);
-                        cmd.Parameters.AddWithValue("@Password", loginRequest.Password);
 
                         using (SqlDataReader reader = cmd.ExecuteReader())
                         {
@@ -56,25 +62,30 @@ namespace angularAuctionBackend.Controllers
                                 {
                                     UserId = reader["UserId"] != DBNull.Value ? Convert.ToInt32(reader["UserId"]) : null
                                 };
+                                storedHashedPassword = reader["Password"].ToString();
                             }
                         }
                     }
                 }
 
-                if (user == null)
+                if (user == null || string.IsNullOrEmpty(storedHashedPassword))
                 {
-                    return NotFound("User not found.");
+                    return NotFound("User not found or password hash missing.");
+                }
+
+                var passwordHasher = new PasswordHasher<UserDTO>();
+
+                var verificationResult = passwordHasher.VerifyHashedPassword(user, storedHashedPassword, loginRequest.Password);
+
+                if (verificationResult == PasswordVerificationResult.Failed)
+                {
+                    return Unauthorized("Invalid password.");
                 }
 
                 // Generate tokens
                 var accessToken = GenerateAccessToken(loginRequest.UserName, loginRequest.Role, user.UserId);
-                //var refreshToken = GenerateRefreshToken();
-
-                // Store refresh token with role
-                //RefreshTokens[refreshToken] = (loginRequest.UserName, loginRequest.Role);
 
                 user.Token = accessToken;
-                //user.RefreshToken = refreshToken;
                 user.Role = loginRequest.Role;
 
                 return Ok(user);
@@ -84,6 +95,54 @@ namespace angularAuctionBackend.Controllers
                 return StatusCode(500, $"An error occurred: {ex.Message}");
             }
         }
+
+
+        [HttpPost]
+        [Route("sign-up")]
+        public async Task<IActionResult> SignUp([FromForm] User user)
+        {
+            var imageURL = "";
+            if (string.IsNullOrEmpty(user.Username) || string.IsNullOrEmpty(user.Password))
+            {
+                return BadRequest("Username, password, and Image are required.");
+            }
+            try
+            {
+                if(user.ImageURL != null)
+                {
+                 imageURL=await _imageSave.SaveImageToServer(user.ImageURL);
+                }
+                var passwordHasher = new PasswordHasher<User>();
+
+                var hashedPassword = passwordHasher.HashPassword(user, user.Password);
+
+                var query = user.Role switch
+                {
+                    "seller" => "INSERT INTO Users (UserName, Password,Email, flag) VALUES (@UserName, @Password,@Email,'1')",
+                    "buyer" => "INSERT INTO Customers (UserName, Password,Email,flag) VALUES (@UserName, @Password,@Email,'1')",
+                    _ => throw new ArgumentException("Invalid role.")
+                };
+                using (SqlConnection con = new SqlConnection(_configuration.GetConnectionString("DefaultConnection")))
+                {
+                    con.Open();
+                    using (SqlCommand cmd = new SqlCommand(query, con))
+                    {
+                        cmd.Parameters.AddWithValue("@UserName", user.Username);
+                        cmd.Parameters.AddWithValue("@Password", hashedPassword);
+                        cmd.Parameters.AddWithValue("@Email", user.Email);
+                        cmd.Parameters.AddWithValue("@ImageURL", imageURL);
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+                return Ok("User created successfully.");
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"An error occurred: {ex.Message}");
+            }
+        }
+
+
 
         [HttpPost]
         [Route("refresh-token")]
