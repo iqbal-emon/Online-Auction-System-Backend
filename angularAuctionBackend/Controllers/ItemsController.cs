@@ -1,11 +1,14 @@
 ﻿using angularAuctionBackend.Model.ModelDto;
+using angularAuctionBackend.redisCaching;
 using angularAuctionBackend.Shared;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Configuration;
+using StackExchange.Redis;
 using System.Data;
 
 namespace angularAuctionBackend.Controllers
@@ -17,27 +20,44 @@ namespace angularAuctionBackend.Controllers
         private readonly IConfiguration _configuration;
         private readonly ImageSave imageSave;
         private readonly IHubContext<ProductHub> _hubContext;
-        public ItemsController(IConfiguration config, ImageSave imageSave, IHubContext<ProductHub> hubContext)
+        private readonly IConnectionMultiplexer _connectionMultiplexer;
+        private readonly IDistributedCache _cache;
+        public ItemsController(IConfiguration config, ImageSave imageSave, IHubContext<ProductHub> hubContext,IConnectionMultiplexer connectionMultiplexer, IDistributedCache cache)
         {
             _configuration = config;
             this.imageSave = imageSave;
             _hubContext = hubContext;
+            _connectionMultiplexer = connectionMultiplexer;
+            _cache = cache;
         }
 
         [HttpGet]
         [Route("activeProduct/{UserId}")]
         [Authorize(Roles = "seller,buyer")]
-        public IActionResult GetItems(int? UserId)
+        public async Task<IActionResult> GetItems(int? UserId)
         {
+            // Generate different cache keys based on UserId condition
+            string cacheKey = UserId == 0
+                ? "activeProducts_allUsers"
+                : $"activeProducts_user_{UserId}";
+
+            var cachedItems = await _cache.GetRecordAsync<List<itemsDTO>>(cacheKey);
+
+            if (cachedItems != null)
+            {
+                // Return from cache if items are found
+                return Ok(cachedItems);
+            }
+
             var query = "";
-            if(UserId == 0) {
+            if (UserId == 0)
+            {
                 query = "SELECT * FROM Items";
             }
             else if (UserId != null)
             {
                 query = "SELECT * FROM Items where UserID=@userId";
             }
-
 
             List<itemsDTO> itemList = new List<itemsDTO>();
 
@@ -77,6 +97,10 @@ namespace angularAuctionBackend.Controllers
                                 itemList.Add(dto);
                             }
                         }
+
+                        // Cache the result in Redis with a specific cache key
+                        await _cache.SetRecordAsync(cacheKey, itemList, TimeSpan.FromSeconds(60));
+
                         return Ok(itemList);
                     }
                 }
@@ -86,6 +110,7 @@ namespace angularAuctionBackend.Controllers
                 return StatusCode(500, "An error occurred while fetching user details.");
             }
         }
+
 
         [HttpGet]
         [Route("biddingList/{id}")]
